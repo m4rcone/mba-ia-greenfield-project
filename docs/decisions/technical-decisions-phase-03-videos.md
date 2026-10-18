@@ -46,7 +46,10 @@ _Inherited constraints (not reopened):_ PostgreSQL + TypeORM with migrations and
 **Recommendation:** Option A (BullMQ + Redis) — it is the only option that both satisfies the "real Compose service" constraint and natively covers retries/backoff, dedup by `jobId`, unrecoverable failures and scheduled cleanup (TD-10/TD-11) through an official `@nestjs/bullmq` module, keeping the worker code minimal; RabbitMQ would require building those semantics by hand. Canonical env keys: `REDIS_HOST=redis`, `REDIS_PORT=6379` (Compose service name per root CLAUDE.md).
 
 **Decision:** A (BullMQ + Redis)
-**Libraries:** bullmq, @nestjs/bullmq
+**Libraries:** bullmq, @nestjs/bullmq, ioredis
+
+**Revisions:**
+- 2026-10-18 — `@nestjs/bullmq` is pinned to `^11.0.5` instead of the `v12.x` named in Option A. Version 12.0.0 ships ESM-only (`"type": "module"`), so the project's CommonJS + ts-jest setup cannot load it. 11.0.5 is CommonJS, declares peers `@nestjs/core ^10 || ^11` and `bullmq ^3 || ^4 || ^5 || ^6`, and exposes the same API this phase uses (`BullModule.forRootAsync` with `connection`, `registerQueue`, `@Processor` + `WorkerHost`, `@OnWorkerEvent`). BullMQ v6 made `ioredis` an optional peer dependency that Redis users must install explicitly, so `ioredis@^5.11.1` is a direct dependency and joins **Libraries**. Upgrade `@nestjs/bullmq` together with a future ESM or Nest 12 migration. Rationale: implementation finding in phase-03 SI-03.6 (deviation approved by the user); the queue choice itself is unchanged.
 
 ---
 

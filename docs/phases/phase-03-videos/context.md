@@ -3,13 +3,13 @@ kind: phase
 name: phase-03-videos
 sources_mtime:
   docs/project-plan.md: "2026-10-17T22:46:49-03:00"
-  docs/decisions/technical-decisions-phase-03-videos.md: "2026-10-18T00:18:37-03:00"
+  docs/decisions/technical-decisions-phase-03-videos.md: "2026-10-18T02:49:34-03:00"
   docs/decisions/technical-decisions-openapi-docs-nestjs.md: "2026-10-17T22:46:49-03:00"
   docs/phases/phase-01-configuracao-base/context.md: "2026-10-17T22:46:49-03:00"
   docs/phases/phase-02-auth/context.md: "2026-10-17T22:46:49-03:00"
   docs/phases/phase-02-auth-frontend/context.md: "2026-10-17T22:46:49-03:00"
-  .claude/skills/testing-guide-nestjs-project/SKILL.md: "2026-10-17T22:46:49-03:00"
-  docs/phases/phase-03-videos/library-refs.md: "2026-10-18T00:31:53-03:00"
+  .claude/skills/testing-guide-nestjs-project/SKILL.md: "2026-10-18T02:44:40-03:00"
+  docs/phases/phase-03-videos/library-refs.md: "2026-10-18T02:50:15-03:00"
 ---
 
 # phase-03-videos — Context
@@ -45,11 +45,13 @@ sources_mtime:
 
 | Ref | Source | Scope | Topic | Status | Decision | Libraries |
 |-----|--------|-------|-------|--------|----------|-----------|
-| phase-03-videos/TD-01 | phase | Backend | Queue Technology (job broker for video processing) | decided | A (BullMQ + Redis) | bullmq, @nestjs/bullmq |
+| phase-03-videos/TD-01 | phase | Backend | Queue Technology (job broker for video processing) | decided | A (BullMQ + Redis) | bullmq, @nestjs/bullmq, ioredis |
+|     └─ Last revision: 2026-10-18 — `@nestjs/bullmq` is pinned to `^11.0.5` instead of the `v12.x` named in Option… | | | | | | |
 | phase-03-videos/TD-02 | phase | Cross-layer | Large Upload Protocol (≤10GB direct to storage) | decided | B (S3 multipart upload, presigned URL per part) | — |
 |     └─ Last revision: 2026-10-18 — Pins the verifiable acceptance criterion for "sem impacto na performance": th… | | | | | | |
 | phase-03-videos/TD-03 | phase | Backend | S3 Client Library | decided | A (AWS SDK for JavaScript v3) | @aws-sdk/client-s3, @aws-sdk/s3-request-presigner |
 | phase-03-videos/TD-04 | phase | Cross-layer | MinIO Internal vs Public Endpoint for Presigned URLs | decided | A (two S3 clients: internal for I/O, public for presigning) | — |
+|     └─ Last revision: 2026-10-18 — Storage CORS is configured **server-wide** on the `minio` Compose service… | | | | | | |
 | phase-03-videos/TD-05 | phase | Repo-wide | Video Worker Runtime and FFmpeg Integration | decided | A (same codebase, separate entrypoint/container, NestJS standalone context) | — |
 | phase-03-videos/TD-06 | phase | Backend | Processing Trigger | decided | A (the API "complete upload" endpoint enqueues the job) | — |
 | phase-03-videos/TD-07 | phase | Cross-layer | Unique Video URL Strategy (public ID shape) | decided | B (random short base62 ID + unique constraint + retry on collision) | — |
@@ -61,6 +63,7 @@ sources_mtime:
 | phase-03-videos/TD-11 | phase | Backend | Abandoned Multipart Uploads and Stuck Videos Cleanup | decided | B (app reconciler job + storage expiry as safety net) | — |
 | phase-03-videos/TD-12 | phase | Repo-wide | Bucket and Object Key Organization | decided | B (two buckets: `videos` private, `thumbnails` anonymous read) | — |
 | phase-03-videos/TD-13 | phase | Repo-wide | Test Strategy for Storage, Queue and FFmpeg | decided | A (real services in Compose for integration/e2e) | — |
+|     └─ Last revision: 2026-10-18 — The official `minio/minio` and `minio/mc` images are no longer published on… | | | | | | |
 | phase-03-videos/TD-14 | phase | Cross-layer | Accepted Video Formats and Upload Content-Validation Strategy | decided | C (layered: declared allowlist at initiate + ffprobe in worker) | — |
 
 _Source files:_
@@ -86,7 +89,10 @@ _Source files:_
 ### phase-03-videos/TD-01
 
 **Recommendation:** it is the only option that both satisfies the "real Compose service" constraint and natively covers retries/backoff, dedup by `jobId`, unrecoverable failures and scheduled cleanup (TD-10/TD-11) through an official `@nestjs/bullmq` module, keeping the worker code minimal; RabbitMQ would require building those semantics by hand. Canonical env keys: `REDIS_HOST=redis`, `REDIS_PORT=6379` (Compose service name per root CLAUDE.md).
-**Libraries:** bullmq, @nestjs/bullmq
+**Libraries:** bullmq, @nestjs/bullmq, ioredis
+
+**Revisions:**
+- 2026-10-18 — `@nestjs/bullmq` is pinned to `^11.0.5` instead of the `v12.x` named in Option A. Version 12.0.0 ships ESM-only (`"type": "module"`), so the project's CommonJS + ts-jest setup cannot load it. 11.0.5 is CommonJS, declares peers `@nestjs/core ^10 || ^11` and `bullmq ^3 || ^4 || ^5 || ^6`, and exposes the same API this phase uses (`BullModule.forRootAsync` with `connection`, `registerQueue`, `@Processor` + `WorkerHost`, `@OnWorkerEvent`). BullMQ v6 made `ioredis` an optional peer dependency that Redis users must install explicitly, so `ioredis@^5.11.1` is a direct dependency and joins **Libraries**. Upgrade `@nestjs/bullmq` together with a future ESM or Nest 12 migration. Rationale: implementation finding in phase-03 SI-03.6 (deviation approved by the user); the queue choice itself is unchanged.
 
 ### phase-03-videos/TD-02
 
@@ -105,6 +111,9 @@ _Source files:_
 
 **Recommendation:** it fixes the signature/host mismatch with configuration alone, keeps container traffic on Compose service names as mandated, and maps 1:1 to production. Canonical env keys (Joi schema + `compose.yaml` + `.env.example`): `S3_ENDPOINT`, `S3_PUBLIC_ENDPOINT`, `S3_REGION`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_FORCE_PATH_STYLE`, plus bucket names from TD-12. Storage CORS must allow the frontend origin with `GET, PUT, HEAD` and expose `ETag` (required by TD-02).
 **Libraries:** —
+
+**Revisions:**
+- 2026-10-18 — Storage CORS is configured **server-wide** on the `minio` Compose service (`MINIO_API_CORS_ALLOW_ORIGIN=http://localhost:3001`), not per bucket in the provisioning step. MinIO does not implement bucket-level CORS (`PutBucketCors`), so the rule applies to every bucket. During SI-03.1 we verified that the preflight allows `GET`, `PUT` and `HEAD`, exposes `ETag`, and rejects other origins. `http://localhost:3001` is the frontend's host port (`next-frontend/compose.yaml` maps `3001:3000`). Rationale: implementation finding in phase-03 SI-03.1; the CORS requirements above are unchanged, only where they are configured.
 
 ### phase-03-videos/TD-05
 
@@ -156,6 +165,9 @@ _Source files:_
 
 **Recommendation:** it matches the project's existing real-service testing pattern (`db`, `mailpit`) and is the only option that verifies the multipart/presign/Range contracts this phase depends on; the testing-guide skill's storage section should be updated accordingly as part of implementation. (Source option: real MinIO + Redis + ffmpeg via Compose, isolated by test buckets and BullMQ prefix.)
 **Libraries:** —
+
+**Revisions:**
+- 2026-10-18 — The official `minio/minio` and `minio/mc` images are no longer published on Docker Hub or Quay. With the user's approval, Compose uses the drop-in community fork, pinned to exact tags: `pgsty/minio:RELEASE.2026-08-04T00-00-00Z` for the `minio` service and `pgsty/mc:RELEASE.2026-10-18T00-00-00Z` for the one-shot provisioning service, implemented as `minio-init` (named `createbuckets` in TD-12). The real-services strategy is unchanged. Rationale: implementation finding in phase-03 SI-03.1; it applies the "pin an exact MinIO image tag" mitigation in Notes and Risks.
 
 ### phase-03-videos/TD-14
 
@@ -353,7 +365,7 @@ _Source files:_
 | Interceptor (response transform, logging) | Unit and/or E2E |
 | Exception Filter | Unit + E2E |
 | Middleware | E2E |
+| BullMQ processor (`@Processor`) | Unit: dispatch + `failed`-event decision; Integration: real Postgres + Redis + MinIO job outcome |
+| Service running an external binary (ffprobe/ffmpeg) | Integration: real binary on `test/fixtures/media/` fixtures (+ Unit for any branching around it) |
 
-### Video Worker (FFmpeg)
-
-_No testing guide available — layer requirements deferred to implementation._
+_The video worker lives in `nestjs-project` (`src/worker/`, per `phase-03-videos/TD-05`), so the two rows above cover it._
