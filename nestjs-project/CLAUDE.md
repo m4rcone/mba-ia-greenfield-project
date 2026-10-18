@@ -42,7 +42,7 @@ Services (`compose.yaml`):
 - `mailpit` — SMTP capture: SMTP `1025`, web UI/API `8025`
 - `redis` — Redis 8 for BullMQ, port `6379`, AOF persistence and `maxmemory-policy noeviction`
 - `minio` — S3-compatible storage (`pgsty/minio`, a fork, because the official image is no longer published): API `9000`, console `9001`, credentials `streamtube` / `streamtube-secret`. CORS is set server-wide (`MINIO_API_CORS_ALLOW_ORIGIN=http://localhost:3001`, the frontend), and `MINIO_API_STALE_UPLOADS_EXPIRY=48h` is the backstop for abandoned multipart uploads.
-- `minio-init` — one-shot `mc` job that creates the `videos` and `thumbnails` buckets; `nestjs-api` and `video-worker` wait for it to finish
+- `minio-init` — one-shot `mc` job that creates the `videos` (private) and `thumbnails` buckets; `nestjs-api` and `video-worker` wait for it to finish. Anonymous access to `thumbnails` is `s3:GetObject` only, from `minio/thumbnails-anonymous-policy.json` (also loaded by `test/videos-playback.e2e-spec.ts`). Do not switch it to `mc anonymous set download`: that also grants `s3:ListBucket`, which lists every thumbnail key and so every video UUID.
 
 All verification and teardown commands run on the **host machine**:
 

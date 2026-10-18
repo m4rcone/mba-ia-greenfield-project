@@ -100,13 +100,17 @@ services:
     depends_on:
       minio:
         condition: service_healthy
+    volumes:
+      - ./minio:/policies:ro
+    # `mc anonymous set download` also grants s3:ListBucket, which would let anyone list
+    # every thumbnail key (and so every video UUID); the policy file allows GetObject only.
     entrypoint: >
       sh -c "
       mc alias set local http://minio:9000 streamtube streamtube-secret &&
       mc mb --ignore-existing local/videos &&
       mc mb --ignore-existing local/thumbnails &&
       mc anonymous set none local/videos &&
-      mc anonymous set download local/thumbnails
+      mc anonymous set-json /policies/thumbnails-anonymous-policy.json local/thumbnails
       "
 
 volumes:

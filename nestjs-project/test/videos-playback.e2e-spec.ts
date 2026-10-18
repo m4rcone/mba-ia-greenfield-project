@@ -5,6 +5,8 @@ import { Test } from '@nestjs/testing';
 import { ThrottlerStorage, ThrottlerStorageService } from '@nestjs/throttler';
 import type { Queue } from 'bullmq';
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { DataSource, Repository } from 'typeorm';
@@ -72,22 +74,16 @@ describe('Videos playback (e2e)', () => {
     s3 = createMinioTestClient();
     await createTestBucket(s3, videosBucket);
     await createTestBucket(s3, thumbnailsBucket);
-    // Mirrors `mc anonymous set download` on the real thumbnails bucket.
+    // Same policy file `minio-init` applies to the real thumbnails bucket.
+    const policy = readFileSync(
+      join(__dirname, '../minio/thumbnails-anonymous-policy.json'),
+      'utf8',
+    ).replace(
+      /arn:aws:s3:::thumbnails(?=[/"])/g,
+      `arn:aws:s3:::${thumbnailsBucket}`,
+    );
     await s3.send(
-      new PutBucketPolicyCommand({
-        Bucket: thumbnailsBucket,
-        Policy: JSON.stringify({
-          Version: '2012-10-17',
-          Statement: [
-            {
-              Effect: 'Allow',
-              Principal: { AWS: ['*'] },
-              Action: ['s3:GetObject'],
-              Resource: [`arn:aws:s3:::${thumbnailsBucket}/*`],
-            },
-          ],
-        }),
-      }),
+      new PutBucketPolicyCommand({ Bucket: thumbnailsBucket, Policy: policy }),
     );
 
     const moduleFixture = await Test.createTestingModule({
@@ -251,6 +247,19 @@ describe('Videos playback (e2e)', () => {
     const thumbnail = await fetch(body.thumbnail_url!);
     expect(thumbnail.status).toBe(200);
     expect(thumbnail.headers.get('content-type')).toMatch(/^image\//);
+  });
+
+  it('bucket-de-thumbnails-nao-permite-listagem-anonima', async () => {
+    const token = await registerConfirmAndLogin(app);
+    const { id } = await createProcessingVideo(token);
+    await promoteToReady(id);
+
+    // A listing would expose every thumbnail key, and so every video UUID.
+    const listing = await fetch(
+      `${overriddenEnv.S3_PUBLIC_ENDPOINT}/${thumbnailsBucket}/`,
+    );
+
+    expect(listing.status).toBe(403);
   });
 
   it('stream-redireciona-e-storage-atende-range', async () => {
