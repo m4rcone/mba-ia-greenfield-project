@@ -1,7 +1,7 @@
 ---
 scope_type: phase
 related_phases: [3]
-status: pending
+status: decided
 date: 2026-10-17
 scope_description: "Backend + Docker infra for video upload and processing: queue technology, direct-to-storage multipart upload (≤10GB), MinIO internal/public endpoints, FFmpeg worker runtime, processing trigger, unique short video IDs, streaming/download delivery, status lifecycle with retries/idempotency/abandoned-upload cleanup, bucket/key layout, and test strategy for storage/queue/FFmpeg."
 ---
@@ -45,7 +45,8 @@ _Inherited constraints (not reopened):_ PostgreSQL + TypeORM with migrations and
 
 **Recommendation:** Option A (BullMQ + Redis) — it is the only option that both satisfies the "real Compose service" constraint and natively covers retries/backoff, dedup by `jobId`, unrecoverable failures and scheduled cleanup (TD-10/TD-11) through an official `@nestjs/bullmq` module, keeping the worker code minimal; RabbitMQ would require building those semantics by hand. Canonical env keys: `REDIS_HOST=redis`, `REDIS_PORT=6379` (Compose service name per root CLAUDE.md).
 
-**Decision:** _[pending]_
+**Decision:** A (BullMQ + Redis)
+**Libraries:** bullmq, @nestjs/bullmq
 
 ---
 
@@ -77,7 +78,10 @@ _Inherited constraints (not reopened):_ PostgreSQL + TypeORM with migrations and
 
 **Recommendation:** Option B (S3 multipart with presigned per-part URLs) — it is the only option that keeps bytes off the API, is resumable, and respects the AWS limits (5 GB single PUT, 10,000 parts) that will apply in production; server-computed `partSize` with a 16 MiB default keeps 10 GiB at 640 parts while the `ceil(size/10000)` guard keeps the formula valid if the max size grows. Endpoints are documented in `openapi.json` for the deferred frontend.
 
-**Decision:** _[pending]_
+**Decision:** B (S3 multipart upload with presigned URLs per part)
+
+**Revisions:**
+- 2026-10-18 — Pins the verifiable acceptance criterion for "sem impacto na performance": the API process never receives or buffers video bytes (all parts go directly to object storage via presigned URLs) and API memory stays flat during an upload, regardless of file size; no concurrency target is set for this phase. Rationale: resolves phase-03 validation AMB-3 — the capability needed a testable property.
 
 ---
 
@@ -103,7 +107,8 @@ _Inherited constraints (not reopened):_ PostgreSQL + TypeORM with migrations and
 
 **Recommendation:** Option A (AWS SDK v3) — it is the vendor-neutral S3 implementation, so swapping MinIO for AWS S3 or another S3-compatible server (a real possibility given MinIO CE's archival) is a config change, not a rewrite; the checksum default is a known one-line client setting.
 
-**Decision:** _[pending]_
+**Decision:** A (AWS SDK for JavaScript v3)
+**Libraries:** @aws-sdk/client-s3, @aws-sdk/s3-request-presigner
 
 ---
 
@@ -134,7 +139,7 @@ _Inherited constraints (not reopened):_ PostgreSQL + TypeORM with migrations and
 
 **Recommendation:** Option A (internal client for I/O + public client only for presigning) — it fixes the signature/host mismatch with configuration alone, keeps container traffic on Compose service names as mandated, and maps 1:1 to production. Canonical env keys (Joi schema + `compose.yaml` + `.env.example`): `S3_ENDPOINT`, `S3_PUBLIC_ENDPOINT`, `S3_REGION`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_FORCE_PATH_STYLE`, plus bucket names from TD-12. Storage CORS must allow the frontend origin with `GET, PUT, HEAD` and expose `ETag` (required by TD-02).
 
-**Decision:** _[pending]_
+**Decision:** A (Two S3 client instances — internal for I/O, public for presigning)
 
 ---
 
@@ -167,7 +172,7 @@ _Inherited constraints (not reopened):_ PostgreSQL + TypeORM with migrations and
 
 **Recommendation:** Option A (same codebase, `createApplicationContext` entrypoint, dedicated `video-worker` container with ffmpeg) using `execFile` over presigned internal URLs — it isolates CPU-heavy work from the API as the capability requires while keeping a single source of truth for the `videos` schema and a single Definition-of-Done pipeline.
 
-**Decision:** _[pending]_
+**Decision:** A (Same codebase, separate entrypoint and container — NestJS standalone application context)
 
 ---
 
@@ -193,7 +198,7 @@ _Inherited constraints (not reopened):_ PostgreSQL + TypeORM with migrations and
 
 **Recommendation:** Option A (complete endpoint enqueues) — with presigned multipart the API must call `CompleteMultipartUpload` anyway, so it is the natural point to validate size and enqueue; it keeps the trigger inside tested application code and storage-vendor-neutral, and the crash window is covered by `jobId` dedup + the TD-11 reconciler.
 
-**Decision:** _[pending]_
+**Decision:** A (API "complete upload" endpoint enqueues the job)
 
 ---
 
@@ -229,7 +234,7 @@ _Inherited constraints (not reopened):_ PostgreSQL + TypeORM with migrations and
 
 **Recommendation:** Option B (11-char base62 `public_id` with unique constraint + retry, UUID kept as PK) — it satisfies "short and never conflicting" with the DB as the uniqueness authority, stays stable across Fase 04 title edits, and is unguessable for Fase 05 unlisted links.
 
-**Decision:** _[pending]_
+**Decision:** B (Random short ID (base62) + unique constraint + retry on collision)
 
 ---
 
@@ -260,7 +265,10 @@ _Inherited constraints (not reopened):_ PostgreSQL + TypeORM with migrations and
 
 **Recommendation:** Option A (authorize in API, `302` to presigned GET; download via signed `response-content-disposition: attachment`) — storage already implements Range/206 so streaming works without bytes touching Node, while the API keeps control over who may watch; TTL is an env key (`PRESIGNED_GET_TTL_SECONDS`) sized for long videos. Note: no transcoding/HLS in this phase — progressive MP4 playback starts fastest when the `moov` atom is at the front; files without it still play via Range seek.
 
-**Decision:** _[pending]_
+**Decision:** A (API authorizes, then 302 redirect to a short-lived presigned GET)
+
+**Revisions:**
+- 2026-10-18 — Fixes the Phase 03 access rule: `/stream` and `/download` are authenticated and owner-only (the video's owning user), and only when `processing_status=ready`; any other caller gets the standard not-found/forbidden envelope. Phase 04 opens access when a video is published (visibility rules). The frontend player and download button are deferred (contract only in this phase). Rationale: resolves phase-03 validation AMB-1 — no publication flow exists before Phase 04, so every video is still pre-publication.
 
 ---
 
@@ -286,7 +294,10 @@ _Inherited constraints (not reopened):_ PostgreSQL + TypeORM with migrations and
 
 **Recommendation:** Option B (separate `processing_status` and editorial `status=draft`) — it satisfies "pré-cadastro como rascunho" literally while giving the worker a state machine it owns, and avoids a breaking schema change when Fase 04 introduces publication and visibility.
 
-**Decision:** _[pending]_
+**Decision:** B (Two orthogonal columns)
+
+**Revisions:**
+- 2026-10-18 — Clarifies that "rascunho" in the pre-registration capability is the editorial `status=draft`, a field separate from `processing_status`. Minimum data captured at pre-registration (initiate): owner/channel, original filename, declared size and mime type; `title` defaults to the original filename without extension (editable in Phase 04). Rationale: resolves phase-03 validation AMB-2 — the capability did not say which axis "rascunho" belongs to nor which fields are required at initiate.
 
 ---
 
@@ -317,7 +328,7 @@ _Inherited constraints (not reopened):_ PostgreSQL + TypeORM with migrations and
 
 **Recommendation:** Option A (BullMQ `attempts`/exponential backoff + `UnrecoverableError` for invalid media + idempotent, conditional writes keyed by `videoId`) — it uses the queue features chosen in TD-01 and relies on the TD-09 state machine for correctness, so duplicates and retries are harmless.
 
-**Decision:** _[pending]_
+**Decision:** A (Broker-native retries + idempotent processor)
 
 ---
 
@@ -348,7 +359,7 @@ _Inherited constraints (not reopened):_ PostgreSQL + TypeORM with migrations and
 
 **Recommendation:** Option B (scheduled reconciler in the worker + storage-level expiry as backstop) — it is the only option that keeps the `videos` table consistent with storage and recovers stuck jobs, reusing the queue scheduler from TD-01 instead of adding `@nestjs/schedule`.
 
-**Decision:** _[pending]_
+**Decision:** B (Application reconciler job + storage expiry as safety net)
 
 ---
 
@@ -381,7 +392,7 @@ _Inherited constraints (not reopened):_ PostgreSQL + TypeORM with migrations and
 
 **Recommendation:** Option B (private `videos` bucket + anonymous-read `thumbnails` bucket, keys by `videoId` UUID) — it keeps video access fully mediated by the API while giving listings cheap, cacheable thumbnail URLs, and the UUID key prevents enumeration.
 
-**Decision:** _[pending]_
+**Decision:** B (Two buckets — `videos` private and `thumbnails` anonymous read)
 
 ---
 
@@ -412,7 +423,67 @@ _Inherited constraints (not reopened):_ PostgreSQL + TypeORM with migrations and
 
 **Recommendation:** Option A (real MinIO + Redis + ffmpeg via Compose, isolated by test buckets and BullMQ prefix) — it matches the project's existing real-service testing pattern (`db`, `mailpit`) and is the only option that verifies the multipart/presign/Range contracts this phase depends on; the testing-guide skill's storage section should be updated accordingly as part of implementation.
 
-**Decision:** _[pending]_
+**Decision:** A (Real services in Compose for integration/e2e)
+
+---
+
+## TD-14: Accepted Video Formats and Upload Content-Validation Strategy
+
+**Scope:** Cross-layer
+
+**Capability:** Transversal — covers: Upload de vídeos com suporte a arquivos de até 10GB sem impacto na performance; Processamento automático do vídeo após upload (extração de duração e metadados)
+
+**Context:** Nothing decides yet which files count as a valid video. This phase has no transcoding (TD-08 / Notes): the original object is exactly what the browser will play over Range requests. So the allowlist has to be **what browsers play natively**, not just what FFmpeg can read. A `.mkv`/`.avi`/HEVC file ffprobe parses fine would end up `ready` but would not play. Two facts constrain where validation can happen. First, the MIME type a browser declares (`File.type`) is derived from the extension and the client controls it, so it is a hint, not proof. Second, the bytes never pass through the API (TD-02), so the only component that sees real content is the worker running ffprobe (TD-05). This is Cross-layer because the initiate DTO fields (`fileName`, `contentType`) and the rejection error codes are part of the upload contract the deferred frontend will consume. It must also stay consistent with TD-09 (`processing_status=failed`), TD-10 (`UnrecoverableError` for invalid media), and TD-11/TD-12 (storage cleanup, `videos/{videoId}/original` key).
+
+**Allowlist (applies to all options):**
+
+| Container (extension → declared MIME) | ffprobe `format_name` family | Video codecs (`codec_name`) | Audio codecs |
+|---|---|---|---|
+| `.mp4`, `.m4v` → `video/mp4` | `mov,mp4,m4a,3gp,3g2,mj2` | `h264`, `av1` | `aac`, `mp3`, none |
+| `.mov` → `video/quicktime` | `mov,mp4,m4a,3gp,3g2,mj2` | `h264` | `aac`, none |
+| `.webm` → `video/webm` | `matroska,webm` | `vp8`, `vp9`, `av1` | `opus`, `vorbis`, none |
+
+- **Why these:** H.264/AAC in MP4 is the only combination every current browser plays. VP8/VP9/AV1 + Opus/Vorbis in WebM covers the open-codec path (Chrome, Firefox, Safari ≥ 14.1 for VP9). MOV/H.264 covers screen recordings and older phone footage, and plays where MP4/H.264 plays because it is the same ISO-BMFF demuxer family.
+- **Excluded:** MKV, AVI, WMV, FLV, MPEG-TS (no reliable `<video>` playback), and **HEVC/H.265**. caniuse lists HEVC as fully supported only in Safari; Chrome and Firefox support is "partial", depending on platform and hardware. Excluding HEVC rejects iPhone "High Efficiency" recordings. See Notes and Risks: lifting it needs a transcoding phase.
+- **Structural checks on the probe result:** at least 1 video stream; `format.duration` finite and > 0; `width`/`height` > 0. Attached-picture streams (`disposition.attached_pic=1`) do not count as video. ffprobe reports a demuxer *family*, so it cannot tell MP4 from MOV, or WebM from MKV. The codec allowlist is the real gate, and an `.mkv` renamed to `.webm` with VP9/Opus would pass, which is harmless because it plays.
+- **Size bounds stay where TD-02 puts them** (`UPLOAD_MAX_SIZE_BYTES` at initiate + `HeadObject` at complete). This TD does not re-decide them.
+
+**Options:**
+
+### Option A: Declared metadata only (at initiate)
+- `POST /videos` validates the extension of `fileName` and `contentType` against the allowlist, and checks that the two agree. Failure → `400` (`class-validator` + domain error envelope, inherited Fase 02 TD-06/TD-07). The worker trusts the declaration and only extracts metadata.
+- **Pros:** cheapest possible rejection, before any byte is uploaded; trivial to implement and test.
+- **Cons:** spoofable. A renamed `.exe` or a corrupt MP4 passes, and the worker then runs into it anyway. Codec-level rules (HEVC inside `.mp4`) cannot be checked from a filename. Does not satisfy "invalid media → failed" as a guarantee.
+
+### Option B: ffprobe in the worker only
+- Initiate accepts any declared type. The worker's ffprobe result, checked against the allowlist, is the only gate.
+- **Pros:** one source of truth; impossible to spoof; codec-aware.
+- **Cons:** a user can upload 10 GB of an obviously unsupported file (`.avi`, `.zip`) and only learn it is rejected after the upload completes and the worker runs. That wastes bandwidth and storage, and the frontend gets no early, actionable error.
+
+### Option C: Layered — declared allowlist at initiate (fast-fail) + ffprobe in the worker as source of truth
+- **Layer 1, initiate (API, no bytes):** same check as Option A, giving `400` with a stable error code (`UNSUPPORTED_VIDEO_FORMAT`). The declared `contentType` is stored on the row and used as the `ContentType` of `CreateMultipartUpload` (TD-08 download reuses it). This layer filters honest mistakes cheaply and does not try to be a security boundary.
+- **Layer 2, worker (TD-05 ffprobe):** probe the object against the allowlist table and the structural checks above. This layer is authoritative; a mismatch makes the file invalid media.
+- **Failure path (consistent with TD-09/TD-10):** the worker classifies the outcome:
+  - **Unrecoverable:** ffprobe exits non-zero on a *parse* error (e.g., stderr `Invalid data found when processing input` / `moov atom not found`), or exits 0 but fails the allowlist or structural checks. The worker throws `UnrecoverableError`, so BullMQ does not retry (TD-10), and the final-failure handler sets `processing_status=failed` with `processing_error` set to one of `NOT_A_VIDEO` | `UNSUPPORTED_CONTAINER` | `UNSUPPORTED_CODEC` | `CORRUPT_MEDIA`. The update is conditional, `WHERE processing_status='processing'` (TD-09/TD-10 idempotency).
+  - **Retryable:** I/O failures (storage unreachable, `5xx` / connection errors reading the presigned URL, ffprobe timeout) are thrown as regular errors and retried by TD-10's `attempts` + exponential backoff.
+  - TD-10's rule ("non-zero exit on parse → `UnrecoverableError`") is refined, not contradicted: parse errors stay unrecoverable, and transport errors from the HTTP input are explicitly retryable.
+  - Thumbnail generation (`ffmpeg -frames:v 1`) runs only after the probe passes. If it then fails to decode, that also counts as `CORRUPT_MEDIA`.
+- **Pros:** honest users get immediate, actionable `400`s before uploading gigabytes. Correctness does not depend on client honesty. Every invalid-media path ends in a single, explicit `failed` state with a machine-readable reason (useful for the Fase 04 panel).
+- **Cons:** the allowlist exists in two places (initiate DTO + worker validator). Mitigated by one shared constant module (`video-formats.ts`) imported by both, which TD-05 Option A makes possible (same codebase).
+
+### Option D: Layered + magic-byte sniff at `complete` (API)
+- Like C, but `POST /videos/:id/upload/complete` also does a ranged `GetObject` (`bytes=0-4095`) and checks container signatures before enqueueing: ISO-BMFF `ftyp` box at offset 4 with an allowed brand, or EBML header `1A 45 DF A3` with doctype `webm`. On mismatch → `failed` immediately, no job.
+- **Pros:** rejects renamed non-video files a few seconds earlier, without spending a worker slot; distinguishes MOV from MP4 and WebM from MKV by brand/doctype.
+- **Cons:** a third validation point that still cannot judge codecs or corruption, so ffprobe stays mandatory. The API starts reading object bytes (small, but a new responsibility for `complete`). It needs either a sniffing dependency (common ones such as `file-type` have moved to ESM-only, awkward in this CommonJS + ts-jest project; verify per version) or hand-written signature parsing. The gain over C is a short window that only affects already-invalid uploads.
+
+**Storage disposition of rejected objects (sub-decision, applies to B/C/D):**
+- **Recommended: delete the original immediately, keep the row.** When it hits an unrecoverable media failure, the worker issues `DeleteObject` on `videos/{videoId}/original` and deletes the `thumbnails/{videoId}/` prefix if anything was written (TD-12 keys are deterministic, so this is idempotent). The `videos` row stays as `status=draft, processing_status=failed, processing_error=<code>`, so the owner can see why (Fase 04 panel) and delete or retry with a new upload. If the delete fails (storage down), the job still ends `failed`. **TD-11's reconciler is extended** to sweep `failed` rows whose original object still exists (`HeadObject`) and delete it, the same convergence role it already plays for abandoned `uploading` drafts.
+- Alternative: retain the object for N days for debugging, then let the reconciler delete it. This costs up to 10 GB per rejected upload for no user benefit; operators can reproduce from logs (the stored ffprobe stderr excerpt) instead.
+- Size-mismatch rejections at `complete` (TD-02) already delete the object and mark the row `failed`. They use the same codes namespace (`SIZE_MISMATCH`) for consistency but stay owned by TD-02.
+
+**Recommendation:** Option C (declared allowlist at initiate for a cheap `400` + ffprobe in the worker as source of truth, invalid media → `UnrecoverableError` → `processing_status=failed` with a typed `processing_error`, original object deleted immediately with TD-11's reconciler as backstop). The pre-check gives the deferred frontend an early, actionable error without bytes touching the API. ffprobe stays the only check that sees real content and codecs, which matters because there is no transcoding to rescue an unplayable file. The failure path reuses the TD-09 state machine and TD-10 retry semantics, only adding the parse-vs-I/O distinction. Option D's extra sniff duplicates part of what ffprobe already proves seconds later.
+
+**Decision:** C (Layered — declared allowlist at initiate + ffprobe in the worker as source of truth)
 
 ---
 
@@ -420,21 +491,22 @@ _Inherited constraints (not reopened):_ PostgreSQL + TypeORM with migrations and
 
 | ID | Scope | Decision | Recommendation | Choice |
 |----|-------|----------|---------------|--------|
-| TD-01 | Backend | Queue technology | A — BullMQ + Redis (`@nestjs/bullmq`) | _[pending]_ |
-| TD-02 | Cross-layer | Large upload protocol (≤10GB) — upload contract | B — S3 multipart, presigned URL per part, server-computed `partSize` (16 MiB default) | _[pending]_ |
-| TD-03 | Backend | S3 client library | A — AWS SDK v3 (`client-s3` + `s3-request-presigner`) | _[pending]_ |
-| TD-04 | Cross-layer | MinIO internal vs public endpoint | A — internal client for I/O + public client only for presigning | _[pending]_ |
-| TD-05 | Repo-wide | Worker runtime & FFmpeg integration | A — same codebase, `createApplicationContext` entrypoint, `video-worker` container, `execFile` over presigned URL | _[pending]_ |
-| TD-06 | Backend | Processing trigger | A — "complete upload" endpoint enqueues | _[pending]_ |
-| TD-07 | Cross-layer | Unique video URL (public ID shape) | B — 11-char base62 `public_id`, unique + retry, UUID PK kept | _[pending]_ |
-| TD-08 | Cross-layer | Streaming & download delivery | A — `302` to presigned GET; download via signed `Content-Disposition: attachment` | _[pending]_ |
-| TD-09 | Backend | Video status model | B — `processing_status` + editorial `status=draft` | _[pending]_ |
-| TD-10 | Backend | Job retry/backoff/idempotency | A — BullMQ attempts + exponential backoff + `UnrecoverableError` + idempotent writes (`jobId=videoId`) | _[pending]_ |
-| TD-11 | Backend | Abandoned uploads & stuck videos cleanup | B — scheduled reconciler (BullMQ job scheduler) + storage expiry backstop | _[pending]_ |
-| TD-12 | Repo-wide | Bucket & key organization | B — private `videos` + anonymous-read `thumbnails`, keys by `videoId` | _[pending]_ |
-| TD-13 | Repo-wide | Test strategy for storage/queue/FFmpeg | A — real MinIO + Redis + ffmpeg in Compose, isolated test buckets/prefix | _[pending]_ |
+| TD-01 | Backend | Queue technology | A — BullMQ + Redis (`@nestjs/bullmq`) | A |
+| TD-02 | Cross-layer | Large upload protocol (≤10GB) — upload contract | B — S3 multipart, presigned URL per part, server-computed `partSize` (16 MiB default) | B |
+| TD-03 | Backend | S3 client library | A — AWS SDK v3 (`client-s3` + `s3-request-presigner`) | A |
+| TD-04 | Cross-layer | MinIO internal vs public endpoint | A — internal client for I/O + public client only for presigning | A |
+| TD-05 | Repo-wide | Worker runtime & FFmpeg integration | A — same codebase, `createApplicationContext` entrypoint, `video-worker` container, `execFile` over presigned URL | A |
+| TD-06 | Backend | Processing trigger | A — "complete upload" endpoint enqueues | A |
+| TD-07 | Cross-layer | Unique video URL (public ID shape) | B — 11-char base62 `public_id`, unique + retry, UUID PK kept | B |
+| TD-08 | Cross-layer | Streaming & download delivery | A — `302` to presigned GET; download via signed `Content-Disposition: attachment` | A |
+| TD-09 | Backend | Video status model | B — `processing_status` + editorial `status=draft` | B |
+| TD-10 | Backend | Job retry/backoff/idempotency | A — BullMQ attempts + exponential backoff + `UnrecoverableError` + idempotent writes (`jobId=videoId`) | A |
+| TD-11 | Backend | Abandoned uploads & stuck videos cleanup | B — scheduled reconciler (BullMQ job scheduler) + storage expiry backstop | B |
+| TD-12 | Repo-wide | Bucket & key organization | B — private `videos` + anonymous-read `thumbnails`, keys by `videoId` | B |
+| TD-13 | Repo-wide | Test strategy for storage/queue/FFmpeg | A — real MinIO + Redis + ffmpeg in Compose, isolated test buckets/prefix | A |
+| TD-14 | Cross-layer | Accepted video formats & upload content validation | C — declared allowlist at initiate (`400`) + ffprobe in worker as source of truth; invalid media → `UnrecoverableError` → `failed` + delete original | C |
 
-**Dependencies:** TD-02 → TD-04, TD-06, TD-11; TD-06 → TD-01, TD-09; TD-10 → TD-01, TD-09; TD-11 → TD-01, TD-02, TD-10; TD-08 → TD-04, TD-12; TD-05 → TD-03, TD-04; TD-13 → TD-01, TD-05, TD-12.
+**Dependencies:** TD-02 → TD-04, TD-06, TD-11; TD-06 → TD-01, TD-09; TD-10 → TD-01, TD-09; TD-11 → TD-01, TD-02, TD-10; TD-08 → TD-04, TD-12; TD-05 → TD-03, TD-04; TD-13 → TD-01, TD-05, TD-12; TD-14 → TD-02, TD-05, TD-09, TD-10, TD-11, TD-12.
 
 ---
 
@@ -443,6 +515,7 @@ _Inherited constraints (not reopened):_ PostgreSQL + TypeORM with migrations and
 - **MinIO Community Edition is no longer maintained upstream.** Community Docker images stopped being published in late 2025, the repo entered maintenance mode in Dec 2025 and was archived in Feb 2026 (the CVE-2025-62506 fix shipped only in the last release). This document does **not** reopen the storage choice (S3-compatible/MinIO is decided); it mitigates by (a) pinning an exact MinIO image tag — never `latest` — and verifying it includes the final security fixes, and (b) using only the plain S3 API via AWS SDK v3 (TD-03), so moving to AWS S3 or another S3-compatible server is a config change. If the team wants to revisit the storage server itself, open it via `/decide`.
 - **AWS SDK v3 checksum defaults** must be set to `WHEN_REQUIRED` on the clients that presign, otherwise presigned PUTs can fail with signature/checksum errors on S3-compatible servers (TD-03).
 - **No transcoding/HLS** in this phase: the capability is satisfied by progressive MP4 playback over Range requests (TD-08). Adaptive streaming would be a future-phase decision.
+- **HEVC uploads are rejected (TD-14).** iPhones record HEVC in MOV by default ("High Efficiency"), so those files will fail with `UNSUPPORTED_CODEC` until a transcoding phase exists. Accepting them without transcoding would yield `ready` videos that do not play (or do not seek) on Chrome/Firefox, depending on platform and hardware. Revisit via `/decide` if this exclusion proves too costly.
 - **Testing-guide skill drift:** `references/external-systems.md` (local-FS storage in tests) conflicts with TD-13's recommendation; update it during implementation if TD-13 is accepted.
 
-_Sources:_ AWS S3 multipart limits (docs.aws.amazon.com/AmazonS3/latest/userguide/qfacts.html); AWS single-PUT 5 GB limit (S3 user guide, "Uploading objects"); MinIO limits (`minio/docs/minio-limits.md`: single PUT 5 TiB, 10,000 parts, part 5 MiB–5 TiB) and config (`MINIO_API_STALE_UPLOADS_EXPIRY` 24h / `..._CLEANUP_INTERVAL` 6h); AWS SDK data-integrity defaults (docs.aws.amazon.com/sdkref/latest/guide/feature-dataintegrity.html); `fluent-ffmpeg` npm deprecation notice; npm registry versions as of 2026-10-17 (`bullmq` 6.3.x, `@nestjs/bullmq` 12.0.0 with peer `@nestjs/core ^11`, `pg-boss` 12.38, `@aws-sdk/client-s3` 3.1152, `minio` 8.0.7, `@tus/server` 2.4, `nanoid` 6.0 ESM-only).
+_Sources:_ AWS S3 multipart limits (docs.aws.amazon.com/AmazonS3/latest/userguide/qfacts.html); AWS single-PUT 5 GB limit (S3 user guide, "Uploading objects"); MinIO limits (`minio/docs/minio-limits.md`: single PUT 5 TiB, 10,000 parts, part 5 MiB–5 TiB) and config (`MINIO_API_STALE_UPLOADS_EXPIRY` 24h / `..._CLEANUP_INTERVAL` 6h); AWS SDK data-integrity defaults (docs.aws.amazon.com/sdkref/latest/guide/feature-dataintegrity.html); `fluent-ffmpeg` npm deprecation notice; npm registry versions as of 2026-10-17 (`bullmq` 6.3.x, `@nestjs/bullmq` 12.0.0 with peer `@nestjs/core ^11`, `pg-boss` 12.38, `@aws-sdk/client-s3` 3.1152, `minio` 8.0.7, `@tus/server` 2.4, `nanoid` 6.0 ESM-only); HEVC browser support (caniuse.com/hevc); ffprobe demuxer family names `mov,mp4,m4a,3gp,3g2,mj2` / `matroska,webm` (FFmpeg-devel patch adding WebM to the Matroska demuxer name; trac.ffmpeg.org FFprobeTips).
