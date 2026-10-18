@@ -29,6 +29,9 @@ services:
     # `nest start --watch` kills the child without running shutdown hooks. After code changes
     # run `docker compose restart video-worker` (or `npm run start:worker:dev` interactively).
     init: true
+    # On a fresh clone `up -d` runs before `npm install` and `.env` may not exist yet, so the
+    # first starts fail; restarting lets the worker come up on its own once both are in place.
+    restart: unless-stopped
     command: ["sh", "-c", "node_modules/.bin/nest build --path tsconfig.worker.json && exec node dist-worker/worker/main"]
     volumes:
       - .:/home/node/app

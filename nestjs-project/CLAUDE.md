@@ -25,6 +25,9 @@ Only start the NestJS dev server (`npm run start:dev`) when the user **explicitl
 This project runs inside Docker. Always use the container for development:
 
 ```bash
+# Create the env file (first time only — .env is git-ignored; Joi rejects boot without it)
+cp .env.example .env
+
 # Start containers
 docker compose up -d
 
@@ -37,7 +40,7 @@ docker compose exec nestjs-api npm run start:dev
 
 Services (`compose.yaml`):
 - `nestjs-api` — NestJS API, port `3000` (container idles until `start:dev` is run)
-- `video-worker` — video worker: same image and codebase, no HTTP port. Its command compiles `tsconfig.worker.json` to `dist-worker/` and runs `node dist-worker/worker/main` under `init: true`. There is no hot reload: after changing worker code, run `docker compose restart video-worker`.
+- `video-worker` — video worker: same image and codebase, no HTTP port. Its command compiles `tsconfig.worker.json` to `dist-worker/` and runs `node dist-worker/worker/main` under `init: true`. There is no hot reload: after changing worker code, run `docker compose restart video-worker`. It has `restart: unless-stopped`: on a fresh clone it exits until `npm install` has run and `.env` exists, then comes up on its own (Docker's restart backoff can take up to about a minute).
 - `db` — PostgreSQL 17, port `5432`, database `streamtube`, user/password `streamtube`
 - `mailpit` — SMTP capture: SMTP `1025`, web UI/API `8025`
 - `redis` — Redis 8 for BullMQ, port `6379`, AOF persistence and `maxmemory-policy noeviction`

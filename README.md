@@ -55,15 +55,19 @@ O diagrama de arquitetura completo (C4) está em `docs/diagrams/software-arch.me
 
 Os dois subprojetos têm stacks Docker **separadas**. Suba primeiro o backend, rode as migrations e depois o frontend.
 
-### 1. Backend (NestJS + PostgreSQL + Mailpit)
+### 1. Backend (NestJS + PostgreSQL + Mailpit + Redis + MinIO + worker)
 
 ```bash
 cd nestjs-project
 
-# Sobe API, banco e Mailpit
+# Cria o .env a partir do exemplo (apenas na primeira vez — o .env não é versionado)
+cp .env.example .env
+
+# Sobe API, banco, Mailpit, Redis, MinIO e o video-worker
 docker compose up -d
 
-# Instala dependências (apenas na primeira vez)
+# Instala dependências (apenas na primeira vez). O video-worker reinicia sozinho
+# até elas existirem e sobe em até ~1 minuto depois deste passo.
 docker compose exec nestjs-api npm install
 
 # Cria o schema do banco (obrigatório — synchronize está desabilitado)
