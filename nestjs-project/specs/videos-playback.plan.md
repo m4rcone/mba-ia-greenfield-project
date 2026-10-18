@@ -105,3 +105,14 @@ Com estes endpoints o dono acompanha o processamento do vídeo e assiste ou baix
 **Steps:**
   1. Chamar GET /videos/:id, GET /videos/:publicId/stream e GET /videos/:publicId/download sem header `Authorization`
     - expect: HTTP 401 nas três rotas
+
+#### 1.8. bucket-de-thumbnails-nao-permite-listagem-anonima
+
+**Covers AC:** — (bugfix: `phase-03-videos/TD-12` exige que a chave por UUID impeça enumeração)
+**Source:** manual
+**Last sync:** 2026-10-18T06:02:14Z
+
+**Steps:**
+  1. Promover um vídeo para `ready` (ver Setup); o bucket de thumbnails do teste recebe a mesma política de `minio/thumbnails-anonymous-policy.json` que o `minio-init` aplica
+  2. `GET` anônimo na raiz do bucket de thumbnails (`S3_PUBLIC_ENDPOINT` + `/{bucket}/`)
+    - expect: o storage responde 403 (sem `ListBucket`), enquanto o `GET` anônimo da thumbnail continua 200 (cenário 1.2)
