@@ -1,30 +1,34 @@
 ---
 libs:
   bullmq:
-    version: "^6.x"
+    version: "^6.3.16"
     context7_id: "/websites/bullmq_io"
     fetched_at: "2026-10-18T00:31:20-03:00"
   "@nestjs/bullmq":
-    version: "^12.x"
-    context7_id: "/websites/nestjs"
-    fetched_at: "2026-10-18T00:31:20-03:00"
+    version: "^11.0.5"
+    context7_id: "/nestjs/bull"
+    fetched_at: "2026-10-18T02:49:43-03:00"
+  ioredis:
+    version: "^5.11.1"
+    context7_id: "/redis/ioredis"
+    fetched_at: "2026-10-18T02:49:43-03:00"
   "@aws-sdk/client-s3":
-    version: "^3.x"
+    version: "^3.1152.0"
     context7_id: "/aws/aws-sdk-js-v3"
     fetched_at: "2026-10-18T00:31:20-03:00"
   "@aws-sdk/s3-request-presigner":
-    version: "^3.x"
+    version: "^3.1152.0"
     context7_id: "/aws/aws-sdk-js-v3"
     fetched_at: "2026-10-18T00:31:20-03:00"
 sources_mtime:
-  docs/decisions/technical-decisions-phase-03-videos.md: "2026-10-18T00:18:37-03:00"
+  docs/decisions/technical-decisions-phase-03-videos.md: "2026-10-18T02:49:34-03:00"
 ---
 
 # phase-03-videos — Library References
 
 Distilled docs for libraries decided in this slice. Pulled via Context7. Re-fetch when the underlying TD changes (resolve refreshes this file when the lib set in `## Decisions Index` drifts from the cached set here).
 
-None of these packages is installed in `nestjs-project/package.json` yet — versions above are the ranges declared in the TDs (`bullmq` v6.x, `@nestjs/bullmq` v12.x with peer `@nestjs/core ^11`, AWS SDK v3.11xx). Pin to the actual installed versions when `npm install` runs, and re-check the docs if the installed major differs.
+Versions above are the ranges installed in `nestjs-project/package.json`. `@nestjs/bullmq` is `^11.0.5`, not the `v12.x` named in TD-01 Option A, because 12.0.0 is ESM-only; `ioredis` is a direct dependency because BullMQ v6 made it an optional peer (see `phase-03-videos/TD-01` Revisions). Re-check the docs if an installed major changes.
 
 ## bullmq
 
@@ -96,6 +100,8 @@ await queue.upsertJobScheduler(
 
 **Source:** `/websites/nestjs` (docs.nestjs.com/techniques/queues) + `/nestjs/bull` (package API reference) — High reputation. Maps to `phase-03-videos/TD-01` (A), `TD-05` (A).
 
+**Installed version:** 11.0.5, CommonJS, peers `@nestjs/core ^10 || ^11` and `bullmq ^3 || ^4 || ^5 || ^6`. Version 12.0.0 is ESM-only (`"type": "module"`), which the CommonJS + ts-jest setup cannot load (TD-01 Revisions). The API below is unchanged in 11.x: `forRootAsync` / `registerQueue`, `@Processor` classes must extend `WorkerHost` (otherwise `InvalidProcessorClassError` at module init), and `@OnWorkerEvent` binds listeners to the worker created for that processor.
+
 ### Module wiring
 
 Root connection read from the config namespace (Phase 01 `registerAs` convention), then per-queue registration:
@@ -149,6 +155,25 @@ The return value of `process()` is stored on the job. Only register the `@Proces
 ### Testing
 
 `getQueueToken('video-processing')` (`BullQueue_video-processing`) gives the DI token — use `moduleRef.get<Queue>(getQueueToken(name))` in integration/e2e specs, or `overrideProvider(getQueueToken(name))` in unit specs.
+
+## ioredis
+
+**Source:** `/redis/ioredis` (README, `RedisOptions.ts`) + `/taskforcesh/bullmq/v6.3.11` (changelog, connections guide) — High reputation. Maps to `phase-03-videos/TD-01` (A).
+
+### Why it is a direct dependency
+
+BullMQ v6 changelog: "ioredis is no longer installed as a direct dependency and is now an optional peer dependency. Redis users must install ioredis explicitly." `npm install bullmq` therefore no longer brings it in, so it is declared in `package.json` (`^5.11.1`).
+
+### Connection options
+
+The project never creates an ioredis client by hand: `BullModule.forRootAsync` passes `connection: { host, port }` (`REDIS_HOST=redis`, `REDIS_PORT=6379`), and BullMQ builds the clients from that object.
+
+```typescript
+new Redis({ host: 'redis', port: 6379 }); // object form BullMQ builds from `connection`
+```
+
+- `maxRetriesPerRequest` defaults to `20` in ioredis; `null` makes commands wait until the connection is back. BullMQ forces `null` on `Worker` connections and warns if it is overridden, so do not pass a pre-built client with another value.
+- ioredis reconnects automatically and resends unfulfilled blocking commands after reconnecting.
 
 ## @aws-sdk/client-s3
 
