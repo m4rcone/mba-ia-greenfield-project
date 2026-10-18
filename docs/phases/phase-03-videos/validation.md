@@ -4,9 +4,9 @@ name: phase-03-videos
 status: clean
 issue_count: 0
 sources_mtime:
-  docs/phases/phase-03-videos/context.md: "2026-10-18T00:31:59-03:00"
-  docs/decisions/technical-decisions-phase-03-videos.md: "2026-10-18T00:18:37-03:00"
-  docs/phases/phase-03-videos/library-refs.md: "2026-10-18T00:31:53-03:00"
+  docs/phases/phase-03-videos/context.md: "2026-10-18T02:52:17-03:00"
+  docs/decisions/technical-decisions-phase-03-videos.md: "2026-10-18T02:49:34-03:00"
+  docs/phases/phase-03-videos/library-refs.md: "2026-10-18T02:50:15-03:00"
 issues:
   - id: AMB-1
     status: resolved
@@ -109,7 +109,7 @@ _None._
 
 ### Inherited Constraint Conflicts
 
-_None._ _(Decided current-phase TDs are consistent with inherited conventions: new env keys (TD-01 Redis, TD-04 S3, TD-08 TTL) follow the `registerAs` + Joi pattern; TD-13's real-MinIO integration tests satisfy the "real capture service or local adapter" requirement for storage side-effect services; owner-only stream/download (TD-08 revision) reuses phase-02-auth/TD-02 guards.)_
+_None._ _(Decided current-phase TDs are consistent with inherited conventions: new env keys (TD-01 Redis, TD-04 S3, TD-08 TTL) follow the `registerAs` + Joi pattern; TD-13's real-MinIO integration tests satisfy the "real capture service or local adapter" requirement for storage side-effect services; owner-only stream/download (TD-08 revision) reuses phase-02-auth/TD-02 guards. The 2026-10-18 implementation revisions keep every decided option: TD-01 pins `@nestjs/bullmq ^11.0.5` and adds `ioredis` as a direct dependency, TD-04 moves CORS to the `minio` service config, TD-13 pins the `pgsty` MinIO images.)_
 
 ### Unresolved Open Questions
 
