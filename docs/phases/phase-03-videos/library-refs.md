@@ -173,7 +173,7 @@ new S3Client({
 
 `CreateMultipartUploadCommand` → (client PUTs parts via presigned `UploadPart`) → `ListPartsCommand` (resume + build the complete list server-side) → `CompleteMultipartUploadCommand({ MultipartUpload: { Parts: [{ PartNumber, ETag }] } })` → `HeadObjectCommand` (`ContentLength` size check). `AbortMultipartUploadCommand` for cancel/cleanup (TD-11). `PutObjectCommand` for thumbnails.
 
-- Each part must return an `ETag`; the SDK's own uploader throws "Missing Bucket CORS configuration for ETag header?" when absent — the bucket CORS must expose `ETag` (TD-04).
+- Each part must return an `ETag`; the SDK's own uploader throws "Missing Bucket CORS configuration for ETag header?" when absent — the storage CORS must expose `ETag` (TD-04). On MinIO this is server-wide CORS (`MINIO_API_CORS_ALLOW_ORIGIN`), not `PutBucketCors`, which MinIO does not implement (see TD-04 Revisions).
 - `ListParts` is paginated (`IsTruncated`, `NextPartNumberMarker`, `MaxParts` default 1000) — loop until not truncated; 10 GiB / 16 MiB = 640 parts fits one page, but don't rely on it.
 
 ## @aws-sdk/s3-request-presigner

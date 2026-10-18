@@ -1,6 +1,6 @@
 # phase-03-videos — Progress
 
-**Status:** in_progress
+**Status:** completed
 **SIs:** 14/14 completed
 
 ### SI-03.1 — Infra: dependências e serviços Compose (MinIO, Redis, buckets)

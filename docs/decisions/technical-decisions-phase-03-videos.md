@@ -141,6 +141,9 @@ _Inherited constraints (not reopened):_ PostgreSQL + TypeORM with migrations and
 
 **Decision:** A (Two S3 client instances — internal for I/O, public for presigning)
 
+**Revisions:**
+- 2026-10-18 — Storage CORS is configured **server-wide** on the `minio` Compose service (`MINIO_API_CORS_ALLOW_ORIGIN=http://localhost:3001`), not per bucket in the provisioning step. MinIO does not implement bucket-level CORS (`PutBucketCors`), so the rule applies to every bucket. During SI-03.1 we verified that the preflight allows `GET`, `PUT` and `HEAD`, exposes `ETag`, and rejects other origins. `http://localhost:3001` is the frontend's host port (`next-frontend/compose.yaml` maps `3001:3000`). Rationale: implementation finding in phase-03 SI-03.1; the CORS requirements above are unchanged, only where they are configured.
+
 ---
 
 ## TD-05: Video Worker Runtime and FFmpeg Integration
@@ -425,6 +428,9 @@ _Inherited constraints (not reopened):_ PostgreSQL + TypeORM with migrations and
 
 **Decision:** A (Real services in Compose for integration/e2e)
 
+**Revisions:**
+- 2026-10-18 — The official `minio/minio` and `minio/mc` images are no longer published on Docker Hub or Quay. With the user's approval, Compose uses the drop-in community fork, pinned to exact tags: `pgsty/minio:RELEASE.2026-08-04T00-00-00Z` for the `minio` service and `pgsty/mc:RELEASE.2026-10-18T00-00-00Z` for the one-shot provisioning service, implemented as `minio-init` (named `createbuckets` in TD-12). The real-services strategy is unchanged. Rationale: implementation finding in phase-03 SI-03.1; it applies the "pin an exact MinIO image tag" mitigation in Notes and Risks.
+
 ---
 
 ## TD-14: Accepted Video Formats and Upload Content-Validation Strategy
@@ -512,7 +518,7 @@ _Inherited constraints (not reopened):_ PostgreSQL + TypeORM with migrations and
 
 ## Notes and Risks
 
-- **MinIO Community Edition is no longer maintained upstream.** Community Docker images stopped being published in late 2025, the repo entered maintenance mode in Dec 2025 and was archived in Feb 2026 (the CVE-2025-62506 fix shipped only in the last release). This document does **not** reopen the storage choice (S3-compatible/MinIO is decided); it mitigates by (a) pinning an exact MinIO image tag — never `latest` — and verifying it includes the final security fixes, and (b) using only the plain S3 API via AWS SDK v3 (TD-03), so moving to AWS S3 or another S3-compatible server is a config change. If the team wants to revisit the storage server itself, open it via `/decide`.
+- **MinIO Community Edition is no longer maintained upstream.** Community Docker images stopped being published in late 2025, the repo entered maintenance mode in Dec 2025 and was archived in Feb 2026 (the CVE-2025-62506 fix shipped only in the last release). This document does **not** reopen the storage choice (S3-compatible/MinIO is decided); it mitigates by (a) pinning an exact MinIO image tag — never `latest` — and verifying it includes the final security fixes, and (b) using only the plain S3 API via AWS SDK v3 (TD-03), so moving to AWS S3 or another S3-compatible server is a config change. If the team wants to revisit the storage server itself, open it via `/decide`. Implemented with the pinned `pgsty/minio` / `pgsty/mc` fork images (see TD-13 Revisions).
 - **AWS SDK v3 checksum defaults** must be set to `WHEN_REQUIRED` on the clients that presign, otherwise presigned PUTs can fail with signature/checksum errors on S3-compatible servers (TD-03).
 - **No transcoding/HLS** in this phase: the capability is satisfied by progressive MP4 playback over Range requests (TD-08). Adaptive streaming would be a future-phase decision.
 - **HEVC uploads are rejected (TD-14).** iPhones record HEVC in MOV by default ("High Efficiency"), so those files will fail with `UNSUPPORTED_CODEC` until a transcoding phase exists. Accepting them without transcoding would yield `ready` videos that do not play (or do not seek) on Chrome/Firefox, depending on platform and hardware. Revisit via `/decide` if this exclusion proves too costly.
