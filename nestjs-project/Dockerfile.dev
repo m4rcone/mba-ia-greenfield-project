@@ -1,6 +1,7 @@
 FROM node:25.6.0-slim
 
-RUN apt update && apt install -y procps curl
+# ffmpeg (bundles ffprobe) is used by the video worker and its tests (TD-05, TD-13).
+RUN apt update && apt install -y procps curl ffmpeg
 
 WORKDIR /home/node/app
 
