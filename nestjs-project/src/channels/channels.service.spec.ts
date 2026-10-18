@@ -1,14 +1,28 @@
-import { QueryFailedError } from 'typeorm';
+import {
+  DataSource,
+  DeepPartial,
+  EntityManager,
+  FindOneOptions,
+  QueryFailedError,
+} from 'typeorm';
 import { ChannelsService } from './channels.service';
 import { Channel } from './entities/channel.entity';
 
-function makeManager(overrides: Record<string, jest.Mock> = {}): any {
+function makeManagerMock() {
   return {
-    findOne: jest.fn(),
-    create: jest.fn(),
-    save: jest.fn(),
-    ...overrides,
+    findOne: jest.fn<
+      Promise<Channel | null>,
+      [typeof Channel, FindOneOptions<Channel>]
+    >(),
+    create: jest.fn<Channel, [typeof Channel, DeepPartial<Channel>]>(),
+    save: jest.fn<Promise<Channel>, [Channel]>(),
   };
+}
+
+type ManagerMock = ReturnType<typeof makeManagerMock>;
+
+function makeManager(overrides: Partial<ManagerMock> = {}): ManagerMock {
+  return { ...makeManagerMock(), ...overrides };
 }
 
 function makeChannel(nickname: string): Channel {
@@ -24,16 +38,18 @@ function makeChannel(nickname: string): Channel {
 }
 
 function makeUniqueError(): QueryFailedError {
-  const err = new QueryFailedError('INSERT', [], new Error()) as any;
-  err.code = '23505';
-  err.detail = 'Key (nickname)=(abc) already exists.';
-  return err;
+  return Object.assign(new QueryFailedError('INSERT', [], new Error()), {
+    code: '23505',
+    detail: 'Key (nickname)=(abc) already exists.',
+  });
 }
 
-function makeDataSource(manager: any): any {
-  return {
-    transaction: jest.fn((cb: (manager: any) => Promise<any>) => cb(manager)),
-  };
+function makeDataSource(manager: ManagerMock): DataSource {
+  const transaction = jest.fn(
+    (cb: (manager: EntityManager) => Promise<Channel>) =>
+      cb(manager as unknown as EntityManager),
+  );
+  return { transaction } as unknown as DataSource;
 }
 
 describe('ChannelsService', () => {

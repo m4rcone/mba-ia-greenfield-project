@@ -193,3 +193,40 @@ await bcrypt.hash(password, SALT_ROUNDS);
 ```
 
 Do NOT mock bcrypt — a lower cost factor is safe for tests and still exercises the real hashing code path.
+
+---
+
+## 12. S3 SDK v3 adds CRC32 checksums that MinIO presigned URLs cannot satisfy
+
+**Problem:** recent `@aws-sdk/client-s3` versions default to `requestChecksumCalculation: 'WHEN_SUPPORTED'`. Presigned `UploadPart` URLs then embed `x-amz-checksum-crc32` / `x-amz-sdk-checksum-algorithm` params that a browser `PUT` cannot satisfy against an S3-compatible store, so the part upload is rejected.
+
+**Fix:** every `S3Client` (production clients in `StorageModule` *and* raw test clients from `createMinioTestClient()`) sets:
+```typescript
+requestChecksumCalculation: 'WHEN_REQUIRED',
+responseChecksumValidation: 'WHEN_REQUIRED',
+```
+`src/storage/storage.service.integration-spec.ts` asserts that presigned part URLs carry no checksum params, which catches a regression from an SDK upgrade.
+
+---
+
+## 13. Presigned URLs are bound to their host: use `S3_PUBLIC_ENDPOINT=http://minio:9000` in tests
+
+**Problem:** SigV4 signs the `Host` header, so a presigned URL cannot be rewritten after signing. The public client signs with `S3_PUBLIC_ENDPOINT` (`http://localhost:9000` in dev, reachable from the browser). Inside the `nestjs-api` container, `localhost` is the container itself, so a test that `fetch`es such a URL fails to connect, and swapping the host in the string gives `SignatureDoesNotMatch`.
+
+**Fix:** in tests that actually call presigned URLs, sign against an endpoint the container can reach:
+- E2E: set `process.env.S3_PUBLIC_ENDPOINT = process.env.S3_ENDPOINT ?? 'http://minio:9000'` before compiling `AppModule`, and restore it afterwards.
+- Integration: override the `storage` namespace with `publicEndpoint: process.env.S3_ENDPOINT`.
+
+Assert the production host ("URL host = `S3_PUBLIC_ENDPOINT`") separately, by signing offline with the default config. Never `fetch` that URL.
+
+---
+
+## 14. Close every `Queue` / `Worker` in `afterAll`
+
+**Problem:** every BullMQ `Queue` and `Worker` holds open ioredis connections (a `Worker` holds a blocking one too). If one is left open, Jest hangs after the suite or reports open handles, and a stray worker can consume jobs from the next suite that shares the prefix.
+
+**Fix:**
+- DI-managed queues and `@Processor` workers close with `await module.close()`, which must always be in `afterAll`.
+- Standalone instances (`createTestQueue(prefix)`, a throwaway `new Worker(...)` used to drive a job into `failed`) need their own `await queue.close()` / `await worker.close()`, inside the test or in `afterAll`.
+- Run `obliterateTestQueue(queue)` **before** `module.close()`, because the queue must still be connected.
+- Keep the per-suite `testQueuePrefix()`, so a worker that leaks despite this cannot touch another suite's jobs.

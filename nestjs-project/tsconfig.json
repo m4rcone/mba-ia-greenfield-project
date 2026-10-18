@@ -22,5 +22,7 @@
     "strictBindCallApply": false,
     "noFallthroughCasesInSwitch": false,
     "types": ["jest", "node"]
-  }
+  },
+  // dist-worker is the worker dev build (tsconfig.worker.json); keep its .d.ts out of type-checks.
+  "exclude": ["node_modules", "dist", "dist-worker"]
 }
