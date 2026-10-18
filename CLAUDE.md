@@ -8,29 +8,31 @@ More info in the project overview: [docs/project-plan.md](docs/project-plan.md)
 
 ## Repository Structure
 
-This is a monorepo with two main areas:
+This is a monorepo with three main areas:
 
-- `nestjs-project/` — Backend API (NestJS 11, TypeScript, Express). Contains modules for users, channels, videos, comments, etc.
-- `docs/` — Project documentation, architecture diagrams, and planning.
-- `next-frontend/` (Next.js) — not yet initialized
+- `nestjs-project/` — Backend (NestJS 11, TypeScript, Express): the REST API plus the video worker, a second entrypoint (`src/worker/main.ts`) built from the same codebase. Modules: `auth`, `users`, `channels`, `mail`, `videos`, `storage`, `queue`. Details in `nestjs-project/CLAUDE.md`.
+- `next-frontend/` — Frontend (Next.js 16), with its own Compose file (host port `3001`) and its own `CLAUDE.md`.
+- `docs/` — Project documentation, architecture diagrams, and planning (`docs/phases/`, `docs/decisions/`).
 
 ## Architecture (C4 Container Diagram)
 
 See `docs/diagrams/software-arch.mermaid` for the full diagram. Key containers:
 
-- **Frontend** (Next.js) → calls API via REST, streams from Object Storage
-- **API** (Nest.js) → business rules, auth, reads/writes DB, uploads to storage, publishes jobs to queue, sends emails
-- **Video Worker** (FFmpeg) → consumes jobs from queue, processes videos, updates DB and storage
-- **Database** (PostgreSQL) → users, channels, videos, comments, likes
-- **Object Storage** (S3/MinIO) → video files and thumbnails
-- **Message Queue** (TBD) → video processing job queue
-- **Email Service** (SMTP) → account confirmation and password recovery
+- **Frontend** (Next.js) → calls API via REST; uploads video parts and streams/downloads directly from Object Storage through presigned URLs issued by the API
+- **API** (Nest.js) → business rules, auth, reads/writes DB, issues presigned storage URLs, publishes jobs to the queue, sends emails. Video bytes never pass through the API.
+- **Video Worker** (Nest.js standalone context + FFmpeg/ffprobe, Compose service `video-worker`) → consumes the `video-processing` queue: extracts metadata, generates the thumbnail, updates DB and storage; an hourly reconciler cleans up abandoned uploads and stuck jobs
+- **Database** (PostgreSQL 17) → users, channels, auth tokens, videos (comments and likes in later phases)
+- **Object Storage** (MinIO, S3-compatible; Compose service `minio`) → private `videos` bucket and anonymous-read `thumbnails` bucket
+- **Message Queue** (BullMQ on Redis; Compose service `redis`) → `video-processing` job queue
+- **Email Service** (SMTP; Mailpit in development) → account confirmation and password recovery
 
 ## Docker Networking
 
 This project runs entirely in Docker containers. When configuring connections between services (database, cache, queue, etc.), **always use the Docker Compose service name** as the host — never `localhost` or `127.0.0.1`.
 
-Inside a container, `localhost` refers to the container itself, not the host machine or other containers. Services communicate through the Docker Compose network using their service names (e.g., `db`, `nestjs-api`).
+Inside a container, `localhost` refers to the container itself, not the host machine or other containers. Services communicate through the Docker Compose network using their service names (e.g., `db`, `redis`, `minio`, `mailpit`, `nestjs-api`).
+
+One deliberate exception: `S3_PUBLIC_ENDPOINT` (default `http://localhost:9000`) is the host used to **sign** presigned URLs that the browser calls, so it must be reachable from the browser, not from inside the network. Server-side storage calls use `S3_ENDPOINT=http://minio:9000`.
 
 - **Correct:** `DB_HOST=db` (the Compose service name)
 - **Wrong:** `DB_HOST=localhost`

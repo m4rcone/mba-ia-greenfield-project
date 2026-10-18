@@ -14,7 +14,7 @@ description: >
 
 This guide helps you decide **what to test**, at **which layer**, and **how to set up tests** for each type of artifact in `nestjs-project`. When working on a specific artifact type, read the corresponding guide in `artifacts/` for the complete recipe. Supporting references (mock strategies, file conventions, gotchas) are in `references/`.
 
-Artifact types covered: entities, services, controllers, modules, DTOs, guards, strategies, pipes, interceptors, filters, middleware. For anticipated types not yet in the project, see `artifacts/future-types.md`.
+Artifact types covered: entities, services, controllers, modules, DTOs, guards, strategies, pipes, interceptors, filters, middleware, queue processors and external-binary services. For anticipated types not yet in the project, see `artifacts/future-types.md`.
 
 ## 1. Testability Foundations
 
@@ -78,6 +78,8 @@ When implementing a new feature, use this checklist to ensure all artifacts have
 | Interceptor (response transform, logging) | Unit and/or E2E | `artifacts/interceptors.md` |
 | Exception Filter | Unit + E2E | `artifacts/filters.md` |
 | Middleware | E2E | `artifacts/middleware.md` |
+| BullMQ processor (`@Processor`) | Unit: dispatch + `failed`-event decision; Integration: real Postgres + Redis + MinIO job outcome | `artifacts/processors.md` |
+| Service running an external binary (ffprobe/ffmpeg) | Integration: real binary on `test/fixtures/media/` fixtures (+ Unit for any branching around it) | `artifacts/processors.md` |
 
 **How to use:** After implementing a feature, walk through each row. For each artifact you created or modified, read the corresponding guide and verify the tests exist.
 
@@ -98,6 +100,7 @@ When creating or modifying an artifact, read the corresponding guide for the com
 | Interceptors | `*.interceptor.ts` | Unit and/or E2E | `artifacts/interceptors.md` |
 | Filters | `*.filter.ts` | Unit + E2E | `artifacts/filters.md` |
 | Middleware | `*.middleware.ts` | E2E | `artifacts/middleware.md` |
+| Processors & binary services | `*.processor.ts`, worker services | Unit + Integration | `artifacts/processors.md` |
 | Future types | — | — | `artifacts/future-types.md` |
 
 ## 5. Anti-patterns — Do NOT Do This
@@ -122,7 +125,7 @@ This guide uses "E2E" to mean **HTTP-layer integration tests** — tests that us
 
 | Topic | File |
 |---|---|
-| External system strategies (DB, storage, queue, email) | `references/external-systems.md` |
+| External system strategies (DB, MinIO storage, BullMQ/Redis queue, ffmpeg binaries, email) | `references/external-systems.md` |
 | Mock health rules & boundary principle | `references/mock-health-rules.md` |
 | File naming, directory structure, coverage targets | `references/file-conventions.md` |
 | Stack-specific gotchas & pitfalls | `references/gotchas.md` |
