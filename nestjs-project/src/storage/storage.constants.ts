@@ -1,0 +1,4 @@
+export const S3_INTERNAL_CLIENT = Symbol('S3_INTERNAL_CLIENT');
+export const S3_PUBLIC_CLIENT = Symbol('S3_PUBLIC_CLIENT');
+
+export const PRESIGNED_PART_URL_TTL_SECONDS = 900;
