@@ -37,89 +37,84 @@ How each external system is handled in tests. These strategies were confirmed wi
 
 ---
 
-## Object Storage — Local Filesystem
+## Object Storage — Real MinIO (Docker)
 
-**Strategy:** Local filesystem storage in development and tests. S3 in production.
+**Strategy:** Real S3-compatible storage via the Docker `minio` service in `compose.yaml` (TD-13). No local-filesystem adapter and no SDK mocks. The same `@aws-sdk/client-s3` code path runs in tests and in production.
 
-**Approach:**
-- The storage layer should use an abstraction (e.g., `StorageService` interface) that allows switching between local filesystem and S3
-- In tests, use the local filesystem adapter — no mocking needed
-- Use a temporary directory for test uploads: `os.tmpdir()` or a dedicated `test-uploads/` directory
-- Clean up test files in `afterAll`
+**Isolation: one throwaway bucket per suite.** Never touch the dev buckets (`videos`, `thumbnails`). The helpers in `src/test/minio.ts` do this:
+
+| Helper | Purpose |
+|---|---|
+| `createMinioTestClient()` | Raw `S3Client` pointed at `S3_ENDPOINT`, used to seed and assert objects directly |
+| `testBucketName(purpose)` | Unique name per suite run (`test-<purpose>-<ts>-<rand>`) |
+| `createTestBucket(client, bucket)` | Idempotent create |
+| `emptyTestBucket(client, bucket)` | Aborts open multipart uploads, then deletes every object |
+| `deleteTestBucket(client, bucket)` | Empties, then deletes the bucket (call in `afterAll`) |
+
+Point the code under test at the test buckets with one of two methods:
+- **Module/integration specs:** override the `storage` namespace with `registerAs('storage', () => ({ ...storageConfig(), buckets: {...} }))` (see `src/storage/storage.service.integration-spec.ts`).
+- **E2E / whole-module specs (`AppModule`, `WorkerModule`):** set `S3_BUCKET_VIDEOS` / `S3_BUCKET_THUMBNAILS` in `process.env` **before** compiling the module, and restore them in `afterAll`.
 
 **Setup pattern:**
 ```typescript
-// In test module setup
-{
-  provide: 'STORAGE_CONFIG',
-  useValue: {
-    driver: 'local',
-    basePath: path.join(os.tmpdir(), 'streamtube-test-uploads'),
-  },
-}
-```
+const videosBucket = testBucketName('worker-videos');
+let s3: S3Client;
 
-**Integration test:**
-```typescript
-import * as fs from 'fs';
-import * as path from 'path';
-import * as os from 'os';
+beforeAll(async () => {
+  process.env.S3_BUCKET_VIDEOS = videosBucket; // before Test.createTestingModule
+  s3 = createMinioTestClient();
+  await createTestBucket(s3, videosBucket);
+  // ... compile module
+});
 
-describe('StorageService (integration)', () => {
-  const testDir = path.join(os.tmpdir(), 'streamtube-test-uploads');
-
-  afterAll(() => {
-    fs.rmSync(testDir, { recursive: true, force: true });
-  });
-
-  it('should upload and retrieve a file', async () => {
-    const buffer = Buffer.from('test content');
-    const key = await storageService.upload(buffer, 'test.txt');
-
-    const retrieved = await storageService.get(key);
-    expect(retrieved.toString()).toBe('test content');
-  });
+afterAll(async () => {
+  await module.close();
+  await deleteTestBucket(s3, videosBucket);
+  s3.destroy();
+  // restore process.env
 });
 ```
+
+**Assert storage side effects directly** with `HeadObjectCommand` / `ListObjectsV2Command` / `ListMultipartUploadsCommand` on the raw client. Do not assert them through the service under test.
+
+**Presigned URLs:** tests that `fetch` a presigned URL must sign it against an endpoint the container can reach (`http://minio:9000`), because SigV4 signs the `Host` header. See `gotchas.md` §13.
 
 ---
 
-## Message Queue — Real (Docker)
+## Message Queue — Real BullMQ on Redis (Docker)
 
-**Strategy:** Real message broker in Docker. The specific technology is TBD per the architecture diagram (likely BullMQ with Redis or RabbitMQ).
+**Strategy:** Real BullMQ over the Docker `redis` service (`maxmemory-policy noeviction`) (TD-01, TD-13). Never mock `Queue` in integration/E2E specs. `jobId` dedup, retries, backoff and `UnrecoverableError` only behave correctly against a real Redis.
 
-**When the queue technology is chosen, configure:**
-- A queue broker service in `compose.yaml` (e.g., Redis for BullMQ, RabbitMQ for AMQP)
-- Test isolation: use dedicated test queues or clean queues between tests
-- For publisher tests: assert the job is enqueued with correct data
-- For consumer tests: submit a job and assert the processing outcome
+**Isolation: unique BullMQ prefix per suite.** The helpers in `src/test/redis.ts` do this:
 
-**Setup pattern (BullMQ example):**
-```typescript
-// In test module
-BullModule.forRoot({
-  connection: {
-    host: process.env.REDIS_HOST ?? 'localhost',
-    port: Number(process.env.REDIS_PORT ?? 6379),
-  },
-}),
-BullModule.registerQueue({ name: 'video-processing' }),
-```
+| Helper | Purpose |
+|---|---|
+| `testQueuePrefix()` | Unique prefix per suite run, so suites never share keys with the dev queue or each other |
+| `testRedisConfig(prefix)` | `redis` namespace override (`registerAs`) for module/integration specs |
+| `createTestQueue(prefix)` | Standalone `Queue` for asserting on jobs outside DI |
+| `obliterateTestQueue(queue)` | `queue.obliterate({ force: true })`: wipes jobs **and** job schedulers |
 
-```typescript
-describe('VideoService (integration - queue)', () => {
-  it('should enqueue a processing job on upload', async () => {
-    await videoService.upload(videoData);
+For whole-module specs, set `process.env.BULLMQ_PREFIX = testQueuePrefix()` before compiling, the same way as the bucket env vars above.
 
-    const queue = module.get<Queue>(getQueueToken('video-processing'));
-    const jobs = await queue.getJobs(['waiting']);
-    expect(jobs).toHaveLength(1);
-    expect(jobs[0].data).toEqual(
-      expect.objectContaining({ videoId: expect.any(String) }),
-    );
-  });
-});
-```
+**Rules:**
+- `obliterateTestQueue` in `beforeEach` (isolation between tests) **and** `afterAll` (no leftover keys).
+- Get the DI queue with `module.get<Queue>(getQueueToken(VIDEO_PROCESSING_QUEUE))`.
+- **Producer specs:** assert with `queue.getJob(videoId)` (`name`, `data`, `opts`) and `getState()`. Asserting on the jobId is stronger than counting jobs.
+- **Consumer specs:**
+  - *End-to-end processing:* `await module.init()` starts the `@Processor`'s worker. Enqueue through the real producer, then poll the DB row / job state until it settles (a bounded `waitFor` loop, see `src/worker/processors/video.processor.integration-spec.ts`).
+  - *Driving a service in isolation:* compile without `init()` so no worker consumes the jobs under test (see `src/worker/reconciler/upload-reconciler.service.integration-spec.ts`). To reach a real `failed` job state, run a throwaway `new Worker(...)` with the same prefix that rejects with `UnrecoverableError`, then `close()` it.
+- **Retry tests:** `queue.add` the job directly with `...PROCESS_VIDEO_JOB_OPTIONS`, overriding only `backoff` (`{ type: 'fixed', delay: 50 }`), so the real `attempts` stay but the test stays fast. Never fake BullMQ's clock. Simulate the transient error with `jest.spyOn` on the collaborator (e.g. `MediaProbeService.probeAndValidate`).
+- Close everything: `module.close()` closes DI queues and workers, and standalone `Queue`/`Worker` instances need their own `close()` (see `gotchas.md` §14).
+
+---
+
+## External Binaries — Real ffprobe / ffmpeg
+
+**Strategy:** Real binaries, installed in the dev image (`Dockerfile.dev`), run on small committed fixtures (TD-05, TD-13). Mocking `execFile` would hide argument, parsing and stderr-classification bugs.
+
+- Fixtures live in `test/fixtures/media/` (about 120 KB in total, generated with ffmpeg lavfi test sources). The names are in `MEDIA_FIXTURES` (`src/test/media-fixtures.ts`): valid mp4/webm, sub-second clip, truncated mp4, PNG renamed to `.mp4`, codec outside the allowlist.
+- `uploadMediaFixture(client, bucket, fileName)` puts a fixture into the test bucket, and the spec probes it via a presigned internal GET URL. This is the same input path the worker uses in production.
+- Add a new fixture only when a new failure class needs it. Generate it with ffmpeg inside the container and document it in `MEDIA_FIXTURES`.
 
 ---
 
